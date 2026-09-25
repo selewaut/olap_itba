@@ -2,7 +2,7 @@
 
 ## Status
 
-Planning only. No new datasets have been generated. The source CSV and the original `VD.zip` remain unchanged.
+Implemented in `src/preprocessing/vd_datasets.py`. The generated outputs are `data/processed/fact_fondos_sbs.csv` and `data/processed/fact_fondos_competencia.csv`. The source CSV and the original `VD.zip` remain unchanged.
 
 ## 1. Input and initial validation results
 
@@ -15,16 +15,16 @@ Planning only. No new datasets have been generated. The source CSV and the origi
 - Non-SBS manager rows among open funds: `1,735,993`.
 - Case-insensitive matching of `Sociedad Gerente` against `SBS` returns exactly one unique value:
   - `SBS Asset Management S.A.S.G.F.C.I.`
-- The current classification is therefore unambiguous, but the implementation will still use the approved `contains "SBS"` rule unless exact equality is chosen.
+- The approved classification rule is exact equality with `Sociedad Gerente == "SBS Asset Management S.A.S.G.F.C.I."`.
 - `Fecha` currently uses `DD/MM/YY`, for example `23/09/24`. The observed source format is not `YYYY/MM/DD`.
 - There are `1,792,658` non-empty `Fecha` values and `596` missing values.
 - The first validation of one row per `fecha_reporte` and `Fondos` found:
   - `4` duplicated groups.
   - `8` rows in those groups.
   - The four groups are exact duplicate pairs for `Pionero Money Market Dólar - Clase D` and `Pionero Money Market Dólar - Clase E` on `2026-03-06` and `2026-03-09`.
-- If `Fondo` means the base `fondoId`, one row per report date is not expected because a base fund can have multiple classes. The uniqueness check will therefore use the normalized `FondoClase` identity unless a base-fund-only check is explicitly approved.
+- If `Fondo` means the base `fondoId`, one row per report date is not expected because a base fund can have multiple classes. The uniqueness check will use the normalized original `Fondos` value, which preserves the fund-plus-class identity.
 - The current input does not yet pass the requested one-row-per-report-date-per-`Fondos` validation and must be de-duplicated before output generation.
-- There are `2,755` `FondoClase` x `Fecha` pairs repeated across different `fecha_reporte` values, producing `122,483` extra report observations. These are the records described as likely stale or closed-fund observations and require the requested keep-first rule.
+- There are `2,755` `FondoClase` x `Fecha` pairs repeated across different `fecha_reporte` values, producing `122,483` extra report observations. These occur in both fund types: `2,374` repeated pairs are `Abierto` and `373` are `Cerrado`. This confirms that the condition is not limited to rows explicitly marked `Cerrado`; a fund can remain marked `Abierto` after its last available data date.
 
 ## 2. Output datasets
 
@@ -36,7 +36,7 @@ Contains only rows classified as SBS:
 
 ```text
 Tipo de Fondo == "Abierto"
-and Sociedad Gerente contains "SBS", case-insensitive
+and Sociedad Gerente == "SBS Asset Management S.A.S.G.F.C.I."
 ```
 
 - No non-SBS rows will be included.
@@ -49,7 +49,7 @@ Contains only rows classified as non-SBS:
 
 ```text
 Tipo de Fondo == "Abierto"
-and Sociedad Gerente does not contain "SBS", case-insensitive
+and Sociedad Gerente != "SBS Asset Management S.A.S.G.F.C.I."
 ```
 
 - No SBS rows will be included.
@@ -64,15 +64,15 @@ Dates will be normalized before filtering, grouping, de-duplication, or monthly 
 
 ### `Fecha`
 
-The source `Fecha` column is observed in `DD/MM/YY` format, not `YYYY/MM/DD`. The preprocessing will:
+The source `Fecha` column is observed in `DD/MM/YY` format, not `YYYY/MM/DD`. The approved two-digit-year rule is the standard convention: `00-68` map to `2000-2068` and `69-99` map to `1969-1999`. The preprocessing will:
 
 1. Parse valid values using an unambiguous date parser configured for the observed format.
 2. Convert valid values to ISO `YYYY-MM-DD`.
 3. Store the normalized result in the analytical `Fecha` column.
-4. Preserve the original value in `Fecha_original` for traceability if the schema change is approved.
+4. Preserve the original value internally as `Fecha_original` only for validation and traceability; do not export it.
 5. Report missing or invalid values instead of silently coercing them.
 
-The current input has `596` missing `Fecha` values. The implementation must not perform month selection on those rows. The default proposed policy is to quarantine them from the analytical output and report their count; an alternative policy may keep them in the daily SBS output if approved.
+The current input has `596` missing `Fecha` values. By approved business assumption, these rows represent funds with no valid quota-part observation and will be excluded from both output datasets before the SBS/non-SBS split. Their `Cantidad de Cuotaparte Actual` values are empty rather than literal numeric zeroes, so the exclusion must be based on missing `Fecha`, not on an equality test against zero.
 
 ### `fecha_reporte`
 
@@ -80,7 +80,7 @@ The current input has `596` missing `Fecha` values. The implementation must not 
 
 ## 4. Derived fund columns
 
-The original `Fondos` column will be preserved. Two normalized identity columns will be created before the daily/monthly split.
+The original `Fondos` column will be preserved. Three derived identity columns will be created before the daily/monthly split: `FondoClase`, `fondoId`, and `idCodigoFondoClase`.
 
 ### `FondoClase`
 
@@ -112,7 +112,7 @@ The current source has `31,727` rows without a `Clase` marker across `77` unique
 
 ### `fondoId`
 
-- For a class-labelled `Fondos` value, `fondoId` is the base fund name before the first `Clase` marker.
+- For a class-labelled `Fondos` value, `fondoId` is the base fund name before the first `Clase` marker, with the separator before `Clase` removed.
 - For a single-class value, `fondoId` is set to the same normalized value as `FondoClase` and the original `Fondos` value.
 
 Example:
@@ -122,39 +122,47 @@ Adcap Balanceado I - Clase A -> fondoId = "Adcap Balanceado I"
 1810 Mas Ahorro -> fondoId = "1810 Mas Ahorro"
 ```
 
+The class separator is removed only when a `Clase` marker is present. Legitimate punctuation at the end of a fund name is preserved; the current data has eight such names, including `Optimum FAE (Fondo de Aplicaciones Especiales)`, `Superfondo Renta $`, and names ending in `F.C.I.`.
+
 The logical fund identity is the combination of `fondoId` and `FondoClase`, which is equivalent to the original fund-plus-class `Fondos` value. This prevents different classes of the same fund from being combined.
 
-### `idFondoClase`
+### `idCodigoFondoClase`
 
-A stable traceability identifier will be added as `idFondoClase`:
+A stable traceability identifier will be added as `idCodigoFondoClase`:
 
-- Prefer the existing `Código Fondo CAFCI` and `Código Clase CAFCI` columns.
-- Construct the identifier from those codes when available.
-- If either code is missing, use a deterministic fallback built from normalized `fondoId` and `FondoClase`.
-- Keep the same identifier for repeated observations of the same fund/class.
+The primary identifier format is:
 
-The current source has no missing values in either CAFCI code column. The exact identifier format will be documented in the output schema when implementation begins.
+```text
+idCodigoFondoClase = "CAFCI-" + Código Fondo CAFCI + "-" + Código Clase CAFCI
+```
+
+- The current source has no missing values in either CAFCI code column.
+- If a code is missing in a future input, use `NO-CODE-<sha256>` based on normalized `fondoId` and `FondoClase`.
+- `idCodigoFondoClase` is for source-code traceability; `FondoClase` remains the normalized name-based identity because the current data has code pairs mapped to multiple names.
 
 ## 5. Initial uniqueness and de-duplication validation
 
 Before generating either output:
 
 1. Normalize `Fecha`.
-2. Derive `FondoClase`, `fondoId`, and `idFondoClase`.
-3. Validate that each `fecha_reporte` has at most one row for each normalized `FondoClase`.
-4. Report any duplicate keys before de-duplication.
-5. Remove exact duplicate rows within the same `fecha_reporte` x `FondoClase` group, keeping the first row.
-6. Re-run the uniqueness validation and require it to pass.
+2. Derive `FondoClase`, `fondoId`, and `idCodigoFondoClase`.
+3. Drop full-row duplicates where every source and derived column is identical, keeping one canonical row.
+4. Exclude rows where `Fecha` is missing under the approved no-quota assumption.
+5. Validate that each `fecha_reporte` has at most one row for each normalized `Fondos` value.
+6. Report any duplicate keys before de-duplication.
+7. For exact duplicate rows within the same `fecha_reporte` x `Fondos` group, keep one canonical row and drop the redundant copy without changing any values.
+8. Re-run the uniqueness validation and require it to pass.
 
 The current input is expected to report the four exact duplicate groups described in Section 1 before de-duplication.
 
 ## 6. Repeated observations and closed funds
 
-For a normalized `FondoClase` x `Fecha` pair observed on different `fecha_reporte` values:
+For a normalized original `Fondos` value x `Fecha` pair observed on different `fecha_reporte` values, the approved rule is:
 
+- Use the original `Fondos` value as the fund identity; the value already includes the class when one is present.
 - Sort observations by `fecha_reporte` ascending.
-- Keep only the first observation.
-- Do not keep later observations with the same fund/class and normalized `Fecha`.
+- Keep only the first/earliest report observation.
+- Treat later observations with the same `Fondos` value and normalized `Fecha` as repeated data from a fund that is no longer active.
 - Use `fecha_reporte` only for this requested duplicate-ordering operation; do not use it for date filtering or monthly selection.
 
 This rule will be applied before the SBS daily and non-SBS monthly split so both outputs are based on the same cleaned source rows. The validation report will show how many repeated pairs and rows were removed.
@@ -163,71 +171,82 @@ This rule will be applied before the SBS daily and non-SBS monthly split so both
 
 After common cleaning:
 
-1. Keep rows where `Tipo de Fondo == "Abierto"`.
-2. Keep rows where `Sociedad Gerente` contains `SBS`, case-insensitive.
-3. Keep all valid daily observations without monthly aggregation.
-4. Include `Fecha` in normalized ISO format, `Fecha_original`, `FondoClase`, `fondoId`, and `idFondoClase`.
-5. Do not use `fecha_reporte` for filtering or analytical date calculations.
-6. Validate that each `fecha_reporte` has at most one row for each normalized `FondoClase`.
+1. Keep rows where `Fecha` is non-missing after normalization.
+2. Keep rows where `Tipo de Fondo == "Abierto"`.
+3. Keep rows where `Sociedad Gerente` equals `SBS Asset Management S.A.S.G.F.C.I.`.
+4. Keep all valid daily observations without monthly aggregation.
+5. Include only the approved final schema, with `Fecha` normalized to ISO format.
+6. Do not use `fecha_reporte` for filtering or analytical date calculations.
+7. Validate that each `fecha_reporte` has at most one row for each normalized `Fondos` value.
 
-The daily output will preserve the remaining source columns unless a separate schema explicitly removes any of them.
+The daily output uses the final 31-column schema documented in Section 10.
 
 ## 8. Monthly non-SBS selection
 
 After common cleaning:
 
-1. Keep rows where `Tipo de Fondo == "Abierto"`.
-2. Keep rows where `Sociedad Gerente` does not contain `SBS`, case-insensitive.
-3. Determine the calendar month from the normalized `Fecha` column.
-4. Group by `fondoId` + `FondoClase` + calendar month.
-5. Keep the row with the greatest available normalized `Fecha` in each group.
-6. If the month-end date is unavailable, keep the latest available date on or before that month end.
-7. Do not use `fecha_reporte` to determine the month, select the latest row, or break ties.
-8. Do not average, sum, or interpolate values.
+1. Keep rows where `Fecha` is non-missing after normalization.
+2. Keep rows where `Tipo de Fondo == "Abierto"`.
+3. Keep rows where `Sociedad Gerente` is not equal to `SBS Asset Management S.A.S.G.F.C.I.`.
+4. Determine the calendar month from the normalized `Fecha` column.
+5. Group by normalized original `Fondos` + calendar month.
+6. Keep the row with the greatest available normalized `Fecha` in the group; this is the latest available business date in that month.
+7. Do not carry forward a date from the following month.
+8. Do not use `fecha_reporte` to determine the month, select the latest row, or break ties.
+9. Do not average, sum, or interpolate values.
 
-The monthly output will include the selected source row and the derived identity/date columns. The requested `FondoClase` x `Fecha` grouping is represented by the normalized `fondoId` + `FondoClase` identity and the normalized analytical date.
+The monthly output will include the selected source row and the derived identity/date columns. The grouping key is the normalized original `Fondos` value plus the calendar month, which preserves the fund-plus-class identity requested for monthly selection.
 
 ## 9. Date interpretation gate
 
-The source `Fecha` values appear to behave like fund metadata dates rather than the daily report date. For example, the same `FondoClase` and `Fecha` can appear across many different `fecha_reporte` values. This explains the repeated observations described above and is why the keep-first rule is required.
+The source `Fecha` values appear to behave like fund metadata dates rather than the daily report date. For example, the same original `Fondos` value and `Fecha` can appear across many different `fecha_reporte` values. This explains the repeated observations described above and is why the keep-first rule is required.
 
-The plan follows the requested instruction to use `Fecha` for the monthly analytical date and does not use `fecha_reporte` for monthly selection. Before implementation, confirm whether this is intentional. If `fecha_reporte` is actually the intended daily date, the monthly rule must be reconsidered because it conflicts with the current instruction not to use `fecha_reporte` as a filtering or analytical date column.
+The plan follows the approved instruction to use `Fecha` for the monthly analytical date, even though its values appear to be fund-level metadata such as inception or registration dates. The normalized value will be used exactly as the analytical date, while `fecha_reporte` remains provenance/duplicate-ordering metadata only. The monthly dataset should therefore be interpreted as a latest-observation dataset grouped by each record's `Fecha`, not as a snapshot of the report-date calendar.
 
 ## 10. Output files after approval
 
-The implementation will write two proposed files under `data/processed/`:
+The implementation writes two files under `data/processed/`:
 
-- `vd_daily_sbs.csv`
-- `vd_monthly_non_sbs.csv`
+- `fact_fondos_sbs.csv`
+- `fact_fondos_competencia.csv`
 
 The exact output names may be changed before implementation if a different naming convention is preferred.
+
+### Final output schema
+
+Both output files contain these 33 normalized columns:
+
+```text
+fecha, id_fondo_clase_dim, id_fondo, id_codigo_fondo_clase,
+nombre_fondo_clase_origen, nombre_fondo, nombre_clase, tipo_fondo,
+tipo_renta, region, tipo_renta_mixta, duracion, benchmark, moneda,
+tipo_cliente, vcp_actual, vcp_anterior, variacion_diaria,
+reexpresion_pesos, variacion_mensual, variacion_anual,
+cantidad_cuotaparte_actual, cantidad_cuotaparte_anterior,
+patrimonio_neto_actual, patrimonio_neto_anterior, calificacion,
+sociedad_gestora, comision_ingreso, honorarios_adm_sg,
+honorarios_adm_sd, otros_gastos, comision_rescate,
+plazo_liquidacion_dias
+```
 
 The implementation will not modify `data/raw/VD.zip` or the current `data/processed/vd_daily.csv`.
 
 ## 11. Validation checklist
 
-- Every valid `Fecha` value is normalized to `YYYY-MM-DD` before date operations.
-- Missing or invalid `Fecha` values are reported and handled according to the approved policy.
+- Every valid `fecha` value is normalized to `YYYY-MM-DD` before date operations.
+- Missing `fecha` values are excluded from both outputs under the approved no-quota assumption.
+- The exclusion count is reported; the current input has `596` such rows.
 - Daily output contains only `Abierto` SBS rows.
 - Monthly output contains only `Abierto` non-SBS rows.
 - No `Cerrado` rows appear in either output.
-- `FondoClase` retains the `Clase` marker when present.
-- `FondoClase` equals normalized `Fondos` for single-class funds without a `Clase` marker.
-- `fondoId` contains the base fund name or the same single-class value.
-- `idFondoClase` is stable and traceable across repeated observations.
-- Each `fecha_reporte` has at most one row for each normalized `FondoClase` after exact duplicate removal.
-- Repeated `FondoClase` x `Fecha` observations retain only the earliest `fecha_reporte` occurrence.
-- The monthly output has one selected row per `fondoId` + `FondoClase` + month.
-- Each monthly selected row is the latest available date on or before that month end.
+- `nombre_clase` retains the `Clase` marker when present.
+- `nombre_clase` equals `nombre_fondo_clase_origen` for single-class funds without a `Clase` marker.
+- `id_fondo` contains the base fund name or the same single-class value.
+- `id_codigo_fondo_clase` is stable and traceable across repeated observations.
+- Full-row duplicates are removed before all other validation and filtering steps.
+- Each `fecha_reporte` has at most one row for each normalized `nombre_fondo_clase_origen` value after exact duplicate removal.
+- Repeated `nombre_fondo_clase_origen` x `fecha` observations retain only the earliest `fecha_reporte` occurrence.
+- The monthly output has one selected row per normalized `nombre_fondo_clase_origen` value and calendar month.
+- Each monthly selected row is the latest available business date in its month.
 - `fecha_reporte` is not used for filtering, analytical date conversion, or monthly selection.
 - Row counts, date ranges, removed duplicates, and unparseable values are reported.
-
-## Approval questions
-
-1. Should SBS classification remain `contains "SBS"` or use exact equality to `SBS Asset Management S.A.S.G.F.C.I.`? The current data produces the same result either way.
-2. Is `FondoClase` intended to contain only the class suffix, such as `Clase A`, with `fondoId` containing the base fund name?
-3. Is the proposed `idFondoClase` format based on `Código Fondo CAFCI` and `Código Clase CAFCI` acceptable?
-4. Should the `596` rows with missing `Fecha` be quarantined, or should they remain in the daily SBS output without date-based operations?
-5. Is the keep-first rule intended to use `FondoClase` + normalized `Fecha`, preserving different classes of the same fund?
-6. Is `Fecha` intentionally the monthly analytical date despite appearing to be a fund metadata date?
-7. For a missing month-end date, is the latest available date on or before month end the desired rule?

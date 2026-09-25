@@ -141,4 +141,59 @@ print(df["archivo"].nunique())
 PY
 ```
 
-Para este archivo, el rango esperado es `2024-09-23` a `2026-09-23` y hay 483 snapshots diarios.
+Para este archivo, el rango esperado es `2024-09-23` a `2026-09-23` y hay
+483 snapshots diarios.
+
+### SBS daily and non-SBS monthly datasets
+
+The assignment datasets are generated from `data/processed/vd_daily.csv` with:
+
+```zsh
+uv run python -m src.preprocessing.vd_datasets
+```
+
+The command performs the following steps in order:
+
+1. Renames source columns to normalized names immediately after loading.
+2. Parses `fecha` from `DD/MM/YY` to ISO `YYYY-MM-DD`.
+3. Excludes rows with missing `fecha` under the no-quota assumption.
+4. Adds normalized `id_fondo`, `id_fondo_clase_dim`, and `id_codigo_fondo_clase`.
+5. Removes duplicate `fecha_reporte` + `nombre_fondo_clase_origen` rows.
+6. Keeps only the earliest report for each `nombre_fondo_clase_origen` + `fecha` pair.
+7. Writes open SBS rows at the daily grain to `data/processed/fact_fondos_sbs.csv`.
+8. Writes open non-SBS rows at the latest available date per month to
+   `data/processed/fact_fondos_competencia.csv`.
+
+`id_codigo_fondo_clase` is `CAFCI-<codigo_fondo_cafci>-<codigo_clase_cafci>`
+and is retained for source traceability. The monthly grouping key is
+`nombre_fondo_clase_origen`, so different classes remain separate.
+
+Both output files contain these 33 normalized columns:
+
+```text
+fecha, id_fondo_clase_dim, id_fondo, id_codigo_fondo_clase,
+nombre_fondo_clase_origen, nombre_fondo, nombre_clase, tipo_fondo,
+tipo_renta, region, tipo_renta_mixta, duracion, benchmark, moneda,
+tipo_cliente, vcp_actual, vcp_anterior, variacion_diaria,
+reexpresion_pesos, variacion_mensual, variacion_anual,
+cantidad_cuotaparte_actual, cantidad_cuotaparte_anterior,
+patrimonio_neto_actual, patrimonio_neto_anterior, calificacion,
+sociedad_gestora, comision_ingreso, honorarios_adm_sg,
+honorarios_adm_sd, otros_gastos, comision_rescate,
+plazo_liquidacion_dias
+```
+
+### SCD2 fund dimensions
+
+Build the shared class and fund dimensions from both finalized fact datasets:
+
+```zsh
+uv run python -m src.preprocessing.vd_dimensions
+```
+
+The command writes:
+
+- `data/processed/dim_fondo_clase.csv`: one SCD2 version per class when a class attribute changes.
+- `data/processed/dim_fondo.csv`: one SCD2 version per base fund when a fund attribute changes.
+
+Each dimension includes a stable business key, a generated version key, `valid_from`, `valid_to`, and `is_current`. `dim_fondo_clase` keeps each class's actual `moneda`; `dim_fondo` uses the majority class currency for each fund/date. The builder reports any remaining fund-level conflicts.

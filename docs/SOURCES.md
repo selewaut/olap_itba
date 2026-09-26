@@ -4,7 +4,7 @@ Verificado el 2026-09-23 con API real BCRA v4. Frecuencia y cobertura abajo.
 
 | # | Indice pedido | Fuente recomendada | Como bajar (implementado en `src/downloading/`) | Frecuencia | Cobertura 2 anios | Plan B |
 |---|---|---|---|---|---|---|
-| 1 | Dólar Oficial | **BCRA API v4** `id=4` minorista vendedor + `id=5` mayorista ref | `bcra_client.py` → `GET /estadisticas/v4.0/Monetarias/{id}?desde=&hasta=` sin auth | Diaria | ✅ Total (4 desde 2010, 5 desde 2002) | BCRA web "Principales variables" CSV; datos.gob.ar serie mensual |
+| 1 | Dólar Oficial | **BCRA API v4** `id=4` minorista vendedor (`id=5` mayorista ref disponible, **fuera del catálogo**) | `bcra_client.py` → `GET /estadisticas/v4.0/Monetarias/{id}?desde=&hasta=` sin auth | Diaria | ✅ Total (4 desde 2010, 5 desde 2002) | BCRA web "Principales variables" CSV; datos.gob.ar serie mensual |
 | 2 | Dólar CCL | **ArgentinaDatos API** casa `contadoconliqui` (fuente DolarApi) | `dolar_ccl.py` → `GET api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui/YYYY/MM/DD` loop ~730 días | Diaria (hábiles) | ✅ Requiere loop (~3-5 min); spot check con `dolarapi.com/v1/dolares/contadoconliqui` | Bluelytics API, Ámbito Financiero scraping, dolarblu.com histórico |
 | 3 | Merval ARS + USD | **Yahoo Finance `^MERV`**; USD = ARS / CCL venta | `market_yfinance.py` (`yfinance`) + `merval_usd()` | Diaria | ✅ | BYMA oficial (sin API, scraping), Investing.com `merv-historical-data` |
 | 4 | Índice CER | **BCRA API v4 `id=30`** base 02/02/2002=1 | `bcra_client.py` | Diaria | ✅ (desde 2002) | BCRA Comunicación "B" series diarias PDF/XLS |
@@ -30,7 +30,7 @@ Verificado el 2026-09-23 con API real BCRA v4. Frecuencia y cobertura abajo.
 2. `... --only merval,bovespa` (requiere `yfinance`).
 3. `... --only ccl` (lento; dejar corriendo).
 4. `... --only indec` (datos.gob.ar, segundos).
-5. `uv run python -m src.preprocessing.clean` → `data/processed/fact_cotizacion.csv` → `\copy` al DW (`sql/dw_create.sql`).
+5. `uv run python -m src.preprocessing.clean` → `data/processed/fact_cotizacion.csv` + `dim_indice.csv` + `dim_indice_detalle.csv`. El modelo de destino está en `docs/plans/postgres-simple-warehouse.md`.
 
 ## Fondos Comunes de Inversión (para comparar)
 

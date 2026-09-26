@@ -96,15 +96,14 @@ id_fondo TEXT,
 
 CREATE TEMP TABLE benchmark_indice (benchmark, codigo_indice_detalle) AS
 SELECT * FROM (VALUES
-    ('Badlar',    'BADLAR'),
-    ('Merval',    'MERVAL_ARS'),
-    ('S&P Merval','MERVAL_ARS'),
-    ('Mar',       'MERVAL_ARS'),
-    ('S&P Mar',   'MERVAL_ARS'),
-    ('A3500',     'MERVAL_ARS'),
-    ('Rofex 20',  'MERVAL_ARS'),
-    ('IAMC',      'MERVAL_USD'),
-    ('Bovespa',   'BOVESPA')
+    ('A3500',      'USD_OFICIAL_MINORISTA'),
+    ('Badlar',     'BADLAR'),
+    ('Bovespa',    'BOVESPA'),
+    ('Mar',        'MERVAL_ARS'),
+    ('Merval',     'MERVAL_ARS'),
+    ('S&P Mar',    'MERVAL_ARS'),
+    ('S&P Mer 25', 'MERVAL_ARS'),
+    ('S&P Merval', 'MERVAL_ARS')
 ) AS t(benchmark, codigo_indice_detalle);
 
 INSERT INTO DetalleFondosTotal (FondoKey, IdFondo, ValidoDesde, ValidoHasta, EsActual, NombreFondo,

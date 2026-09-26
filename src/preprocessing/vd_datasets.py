@@ -90,6 +90,7 @@ _FINAL_COLUMNS = [
     "cantidad_cuotaparte_anterior",
     "patrimonio_neto_actual",
     "patrimonio_neto_anterior",
+    "flujo_neto",
     "calificacion",
     "sociedad_gestora",
     "comision_ingreso",
@@ -160,6 +161,27 @@ def add_fund_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def add_flow_measures(df: pd.DataFrame) -> pd.DataFrame:
+    """Add the derived net flow measure.
+
+    ``flujo_neto`` follows the source workbook definition
+    ``ΔIngresos = (CP₁ − CP₀) × VCP₁``: the change in the number of cuotapartes
+    multiplied by the current Valor Cuota Parte. A missing
+    ``cantidad_cuotaparte_anterior`` is treated as zero previous cuotapartes, so
+    those rows report the full current position as an inflow.
+    """
+    out = df.copy()
+    cuotapartes_actual = pd.to_numeric(
+        out["cantidad_cuotaparte_actual"], errors="coerce"
+    )
+    cuotapartes_anterior = pd.to_numeric(
+        out["cantidad_cuotaparte_anterior"], errors="coerce"
+    ).fillna(0.0)
+    vcp_actual = pd.to_numeric(out["vcp_actual"], errors="coerce")
+    out["flujo_neto"] = (cuotapartes_actual - cuotapartes_anterior) * vcp_actual
+    return out
+
+
 def _output_columns(df: pd.DataFrame) -> list[str]:
     missing = [column for column in _FINAL_COLUMNS if column not in df.columns]
     if missing:
@@ -190,6 +212,25 @@ def _validate_monthly(df: pd.DataFrame) -> None:
     month = pd.to_datetime(df["fecha"]).dt.to_period("M")
     if pd.DataFrame({"fondo": df["nombre_fondo_clase_origen"], "month": month}).duplicated().any():
         raise ValueError("La salida mensual tiene más de una fila por fondo y mes")
+
+
+_VAR_DIARIA_ABSURDA = 100.0
+
+
+def _drop_variacion_absurda(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Drop rows whose daily variation is impossible for a percentage.
+
+    The source sometimes reports a stub ``VCP Anterior`` (about 1, or exactly
+    1000) against a real ``VCP Actual``, which turns the daily variation into
+    millions of percent. The arithmetic is right; the input is not. Those rows
+    also carry ``patrimonio_neto_actual = 0``, so little is lost by dropping
+    them.
+    """
+    # astype("float64") es necesario: sin la conversion los nulos quedan como
+    # pd.NA y ~mask los termina.dropando en vez de conservarlos.
+    variacion = pd.to_numeric(df["variacion_diaria"], errors="coerce").astype("float64")
+    mask = variacion.abs().gt(_VAR_DIARIA_ABSURDA)
+    return df.loc[~mask].copy(), int(mask.sum())
 
 
 def build_datasets(
@@ -229,6 +270,7 @@ def build_datasets(
     df = df[df["fecha"].notna()].copy()
 
     df = add_fund_identity_columns(df)
+    df = add_flow_measures(df)
     rows_before_final_full_dedup = len(df)
     df = df.drop_duplicates(keep="first").copy()
     final_full_duplicates_removed = rows_before_final_full_dedup - len(df)
@@ -250,12 +292,16 @@ def build_datasets(
     monthly_source = df.loc[open_mask & ~sbs_mask].copy()
     monthly_source["_month"] = pd.to_datetime(monthly_source["fecha"]).dt.to_period("M")
     monthly = (
-        monthly_source.sort_values(["nombre_fondo_clase_origen", "_month", "fecha"])
-        .drop_duplicates(["nombre_fondo_clase_origen", "_month"], keep="last")
+        monthly_source.sort_values(["id_fondo_clase_dim", "_month", "fecha"])
+        .drop_duplicates(["id_fondo_clase_dim", "_month"], keep="last")
         .drop(columns="_month")
     )
     daily = daily.sort_values(["fecha_reporte", "nombre_fondo_clase_origen"])
     monthly = monthly.sort_values(["nombre_fondo_clase_origen", "fecha"])
+
+    daily, daily_absurdas = _drop_variacion_absurda(daily)
+    monthly, monthly_absurdas = _drop_variacion_absurda(monthly)
+    absurd_rows_removed = daily_absurdas + monthly_absurdas
 
     _validate_daily(daily)
     _validate_monthly(monthly)
@@ -272,6 +318,7 @@ def build_datasets(
         "final_full_duplicates_removed": final_full_duplicates_removed,
         "report_key_duplicates_removed": report_key_duplicates_removed,
         "repeated_date_duplicates_removed": repeated_date_duplicates_removed,
+        "absurd_variation_rows_removed": absurd_rows_removed,
         "daily_sbs_rows": len(daily),
         "monthly_competencia_rows": len(monthly),
     }

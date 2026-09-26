@@ -7,7 +7,6 @@ are created when a tracked dimension attribute changes.
 from __future__ import annotations
 
 import argparse
-import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -61,12 +60,6 @@ def _majority_currency(values: pd.Series) -> str:
     return sorted(most_common)[0]
 
 
-def _hash_key(*values: str) -> str:
-    """Create a deterministic version key from dimension values."""
-    source = "|".join(values)
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:20]
-
-
 def _read_facts(paths: tuple[Path, ...] = _FACTS) -> pd.DataFrame:
     """Read and concatenate the two normalized fact datasets."""
     frames = [pd.read_csv(path, dtype="string") for path in paths]
@@ -91,8 +84,84 @@ def _prepare_class_source(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return source, duplicate_count
 
 
+def _close_final_versions(
+    versions: pd.DataFrame, comparison: pd.DataFrame, key: str
+) -> None:
+    """Close a key's last version on its last observed date, in place.
+
+    ``valid_to`` is derived from the next version, so the final version would
+    otherwise stay open forever. An open version claims the key is still
+    reported, which is false for the classes and funds that dropped out of the
+    source. A version stays open only when it reaches the last date of the
+    dataset, so ``is_current`` means "still being reported".
+    """
+    last_observed = comparison.groupby(key, sort=False)["fecha"].transform("max")
+    # La ultima version es la de mayor valid_from del grupo. Su valid_from es la
+    # fecha del ultimo cambio de atributos, que no coincide con la ultima
+    # observacion: por eso se cierra contra la observacion, no contra valid_from.
+    final = versions["fecha"].eq(
+        versions.groupby(key, sort=False)["fecha"].transform("max")
+    )
+    closed = pd.to_datetime(last_observed.loc[versions.index]).dt.strftime("%Y-%m-%d")
+    versions.loc[final, "valid_to"] = closed[final]
+    at_end = final & last_observed.loc[versions.index].eq(comparison["fecha"].max())
+    versions.loc[at_end, "valid_to"] = pd.NA
+    versions["is_current"] = versions["valid_to"].isna()
+
+
+def _add_fund_boundaries(source: pd.DataFrame, fund_dimension: pd.DataFrame) -> pd.DataFrame:
+    """Insert a row per fund version boundary so class versions cannot straddle one.
+
+    A class version must live inside a single fund version, otherwise there is no
+    parent row to reference. Some classes have no observation on the date their
+    fund changed, so the boundary row is added and the class attributes are
+    carried forward. Returns the source with a ``_es_corte_fondo`` flag.
+    """
+    boundaries = fund_dimension.loc[
+        fund_dimension.duplicated("id_fondo", keep="first"), ["id_fondo", "valid_from"]
+    ].rename(columns={"valid_from": "fecha"})
+    source = source.copy()
+    source["_es_corte_fondo"] = False
+    if boundaries.empty:
+        return source
+
+    classes = source[["id_fondo_clase_dim", "id_fondo", "fecha"]].drop_duplicates()
+    first_last = classes.groupby("id_fondo_clase_dim")["fecha"].agg(["min", "max"])
+    extra = boundaries.merge(
+        classes[["id_fondo_clase_dim", "id_fondo"]].drop_duplicates(), on="id_fondo"
+    ).merge(first_last, left_on="id_fondo_clase_dim", right_index=True)
+    extra = extra[(extra.fecha > extra["min"]) & (extra.fecha <= extra["max"])]
+    if extra.empty:
+        return source
+
+    added = extra[["id_fondo_clase_dim", "id_fondo", "fecha"]].drop_duplicates()
+    carried = _CLASS_ATTRIBUTES + [
+        "id_codigo_fondo_clase",
+        "nombre_fondo_clase_origen",
+        "nombre_fondo",
+        "nombre_clase",
+    ]
+    # Descarta los cortes que la clase ya tiene observados: solo se agrega la
+    # fila cuando el hecho no tiene registro en esa fecha.
+    existing = set(zip(source["id_fondo_clase_dim"], source["fecha"]))
+    added = added[
+        [pair not in existing for pair in zip(added["id_fondo_clase_dim"], added["fecha"])]
+    ]
+    added = added.assign(**{column: pd.NA for column in carried})
+    padded = pd.concat([source, added.reindex(columns=source.columns)], ignore_index=True)
+    padded = padded.sort_values(["id_fondo_clase_dim", "fecha"])
+    padded[carried] = padded.groupby("id_fondo_clase_dim", sort=False)[carried].ffill()
+    # Se marca todo row que cae en un corte del fondo, no solo los agregados:
+    # la clase suele tener observacion en la fecha del corte.
+    cortes = set(zip(boundaries["id_fondo"], boundaries["fecha"]))
+    padded["_es_corte_fondo"] = [
+        pair in cortes for pair in zip(padded["id_fondo"], padded["fecha"])
+    ]
+    return padded
+
+
 def _build_class_scd(source: pd.DataFrame) -> pd.DataFrame:
-    """Create class dimension versions when a class attribute changes."""
+    """Create class dimension versions when a class or its fund version changes."""
     comparison = source.copy()
     for attribute in _CLASS_ATTRIBUTES:
         comparison[attribute] = _normalize(comparison[attribute])
@@ -101,6 +170,7 @@ def _build_class_scd(source: pd.DataFrame) -> pd.DataFrame:
         _CLASS_ATTRIBUTES
     ].shift()
     is_new = comparison[_CLASS_ATTRIBUTES].ne(previous).any(axis=1)
+    is_new = is_new | comparison.get("_es_corte_fondo", False)
     is_new.loc[
         comparison.groupby("id_fondo_clase_dim", sort=False).head(1).index
     ] = True
@@ -110,13 +180,8 @@ def _build_class_scd(source: pd.DataFrame) -> pd.DataFrame:
         versions.groupby("id_fondo_clase_dim", sort=False)["fecha"].shift(-1)
     )
     versions["valid_to"] = (next_dates - pd.Timedelta(days=1)).dt.strftime("%Y-%m-%d")
-    versions["is_current"] = versions["valid_to"].isna()
-    versions["sk_fondo_clase"] = versions.apply(
-        lambda row: "FC-" + _hash_key(row["id_fondo_clase_dim"], row["valid_from"]),
-        axis=1,
-    )
+    _close_final_versions(versions, comparison, "id_fondo_clase_dim")
     columns = [
-        "sk_fondo_clase",
         "id_fondo_clase_dim",
         "id_fondo",
         "id_codigo_fondo_clase",
@@ -162,15 +227,10 @@ def _build_fund_scd(source: pd.DataFrame) -> pd.DataFrame:
     versions["valid_from"] = versions["fecha"]
     next_dates = pd.to_datetime(versions.groupby("id_fondo", sort=False)["fecha"].shift(-1))
     versions["valid_to"] = (next_dates - pd.Timedelta(days=1)).dt.strftime("%Y-%m-%d")
-    versions["is_current"] = versions["valid_to"].isna()
-    versions["sk_fondo"] = versions.apply(
-        lambda row: "FD-" + _hash_key(row["id_fondo"], row["valid_from"]),
-        axis=1,
-    )
+    _close_final_versions(versions, comparison, "id_fondo")
     class_counts = source.groupby("id_fondo")["id_fondo_clase_dim"].nunique()
     versions["cantidad_clases"] = versions["id_fondo"].map(class_counts)
     columns = [
-        "sk_fondo",
         "id_fondo",
         "valid_from",
         "valid_to",
@@ -190,9 +250,14 @@ def build_dimensions(
     """Build both normalized SCD2 dimension files and return counts."""
     facts = _read_facts(fact_paths)
     class_source, class_same_date_duplicates = _prepare_class_source(facts)
-    class_dimension = _build_class_scd(class_source)
     fund_source, fund_conflicts = _prepare_fund_source(class_source)
     fund_dimension = _build_fund_scd(fund_source)
+    # El fund se construye primero: sus cortes de version son los que alinean
+    # las versiones de clase, para que ninguna clase abarque dos versiones de
+    # su fondo.
+    aligned_source = _add_fund_boundaries(class_source, fund_dimension)
+    fund_boundary_rows = len(aligned_source) - len(class_source)
+    class_dimension = _build_class_scd(aligned_source)
     class_output = Path(class_output)
     fund_output = Path(fund_output)
     class_output.parent.mkdir(parents=True, exist_ok=True)
@@ -207,6 +272,7 @@ def build_dimensions(
         "fund_date_attribute_conflicts": fund_conflicts,
         "class_scd2_rows": len(class_dimension),
         "fund_scd2_rows": len(fund_dimension),
+        "fund_boundary_rows_added": fund_boundary_rows,
     }
     for name, value in counts.items():
         print(f"{name}: {value}")

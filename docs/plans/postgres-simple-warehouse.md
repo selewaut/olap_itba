@@ -268,6 +268,16 @@ The load is not idempotent: it inserts, so it expects empty tables. To reload,
 drop and recreate the database rather than adding a `TRUNCATE`, because
 `TRUNCATE ... CASCADE` on one dimension silently empties the facts.
 
+```bash
+dropdb --force fci_dw
+createdb fci_dw
+psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/tablas_fondos.sql
+psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/dw_load.sql
+```
+
+`--force` is needed while a GUI client holds a session open; without it the
+drop fails with `database is being accessed by other users`.
+
 Every CSV is copied into a `TEMP` staging table that mirrors its header, then
 projected into the final table. The final tables keep fewer columns than the
 fact CSVs, and the staging table exists to absorb the difference: `\copy` maps

@@ -5,7 +5,7 @@
 --   psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/tablas_fondos.sql
 --   psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/dw_load.sql
 --
--- Los CSV de data/processed se dejan intactos. Cada uno se vuelca en una tabla
+-- Los CSV se dejan intactos. Cada uno se vuelca en una tabla
 -- TEMP con el mismo header y despues se proyecta a la tabla final, que es la
 -- unica que lleva las claves surrogadas.
 -- ============================================================================

@@ -118,6 +118,17 @@ DBeaver: driver PostgreSQL, host `localhost`, port `5432`, database
 
 To reload, drop and recreate the database. The load is not idempotent.
 
+```zsh
+dropdb --force fci_dw     # --force closes DBeaver/psql sessions first
+createdb fci_dw
+psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/tablas_fondos.sql
+psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/dw_load.sql
+```
+
+Without `--force` the drop fails with `database is being accessed by other
+users` while a GUI client is connected. Disconnect it, or use `--force`, then
+reconnect and refresh.
+
 ## VD daily preprocessing
 
 El proyecto incluye un preprocesador para los fondos comunes de inversión del archivo `data/raw/VD.zip`. El zip contiene un workbook `.xlsx` por cada snapshot diario disponible.

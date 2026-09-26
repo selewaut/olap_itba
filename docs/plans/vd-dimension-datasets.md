@@ -39,11 +39,11 @@ One row per unique fund/class identity across both SBS and non-SBS data.
 
 | Column | Source or derivation | Purpose |
 |---|---|---|
-| `sk_fondo_clase` | Generated surrogate key for this SCD2 version | Warehouse version key |
+| `sk_fondo_clase` | Generated surrogate key for this SCD2 version | Warehouse version key. Dropped from the CSV; the warehouse assigns it at load time |
 | `id_fondo_clase_dim` | Deterministic key from normalized `id_fondo` + `nombre_clase` | Stable business key across versions |
 | `valid_from` | First normalized `fecha` for this version | SCD2 start date |
-| `valid_to` | Day before the next version, empty for current | SCD2 end date |
-| `is_current` | Whether this is the current version | SCD2 current flag |
+| `valid_to` | Day before the next version, empty while still reported | SCD2 end date |
+| `is_current` | Whether the key is still being reported | SCD2 current flag |
 | `id_fondo` | Link to `dim_fondo` | Fund relationship |
 | `id_codigo_fondo_clase` | Existing generated column | CAFCI traceability |
 | `nombre_fondo_clase_origen` | `nombre_fondo_clase_origen` | Original source label |
@@ -70,11 +70,11 @@ One row per unique base fund. All classes of the same base fund are grouped toge
 
 | Column | Source or derivation | Purpose |
 |---|---|---|
-| `sk_fondo` | Generated surrogate key for this SCD2 version | Warehouse version key |
+| `sk_fondo` | Generated surrogate key for this SCD2 version | Warehouse version key. Dropped from the CSV; the warehouse assigns it at load time |
 | `id_fondo` | Stable fund key to be approved | Stable business key across versions |
 | `valid_from` | First normalized `fecha` for this version | SCD2 start date |
-| `valid_to` | Day before the next version, empty for current | SCD2 end date |
-| `is_current` | Whether this is the current version | SCD2 current flag |
+| `valid_to` | Day before the next version, empty while still reported | SCD2 end date |
+| `is_current` | Whether the key is still being reported | SCD2 current flag |
 | `nombre_fondo` | `id_fondo` | Base fund name |
 | `region` | `Región` | Geographic attribute |
 | `tipo_fondo` | `Tipo de Fondo` | Open/closed classification |
@@ -214,13 +214,27 @@ The implementation will use a simple Type 2 history:
 6. Use the majority class currency for the fund-level `moneda`; retain each
    class's actual currency in `dim_fondo_clase`.
 7. Store `valid_from`, `valid_to`, and `is_current` for each version.
+8. Cut a class version wherever its fund changes version, so a class version
+   never spans two fund versions and always has a single parent to reference.
+9. Close a key's last version on its last observed date, so `is_current` means
+   "still being reported" rather than "is the last version we happen to have".
 
 `valid_from` is the first normalized `fecha` where the attribute combination is
-observed. `valid_to` is the day before the next version's `valid_from`, or empty
-for the current version. The dimension key remains stable across versions; a
-new version gets a separate dimension-version key.
+observed. `valid_to` is the day before the next version's `valid_from`. For a
+key that is still being reported the last version stays open and `valid_to` is
+empty, which is the only case where `is_current` is TRUE. A key that dropped out
+of the source has its last version closed on the date it was last seen, so it
+has no current row at all: 324 of 1474 funds and 1275 of 5166 classes. The
+dimension key remains stable across versions; a new version gets a separate
+dimension-version key.
 
-For now, fact CSVs do not store SCD surrogate keys. They remain joined to dimensions through `id_fondo`/`id_fondo_clase_dim` and the fact `fecha` within the matching SCD2 validity interval.
+Queries that need "the attributes as of today" must therefore test both
+`is_current` and the key's presence, and queries that need the attributes as of
+a past date should join on the validity interval rather than on `is_current`.
+
+The fact CSVs do carry the SCD surrogate key. Each fact row resolves the class
+version that was valid on that row's `fecha`, so a historical fact row keeps
+pointing at the attributes that were true at the time.
 
 ## 12. Decisions and implementation choices
 

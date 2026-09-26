@@ -20,32 +20,34 @@ No tables or SQL objects are created by this plan.
 
 ## Final tables
 
-### `dim_fecha`
+### `dim_time`
 
-One row per date.
+One row per calendar date, 2010-03-01 to 2026-12-31.
 
-| Column | Type | Rule |
+| Column | Type | Notes |
 |---|---|---|
-| `fecha` | `DATE` | Primary key |
-| `anio` | `SMALLINT` | Derived |
-| `mes` | `SMALLINT` | Derived |
-| `dia` | `SMALLINT` | Derived |
-| `trimestre` | `SMALLINT` | Derived |
-| `semana_anio` | `SMALLINT` | Derived |
-| `nombre_mes` | `VARCHAR(15)` | Derived |
+| `date_key` | `DATE` | Primary key |
+| `mes_anio` | `INTEGER NOT NULL` | FK to `dim_mes` |
+| `anio` | `SMALLINT NOT NULL` | |
+| `trimestre` | `SMALLINT NOT NULL` | `CHECK BETWEEN 1 AND 4` |
+| `semana_anio` | `SMALLINT NOT NULL` | ISO week, `CHECK BETWEEN 1 AND 53` |
+| `es_dia_habil` | `BOOLEAN NOT NULL` | Weekday. Not the same as a market holiday |
 
-For this assignment, use the real `DATE` as the date key. No integer `fecha_key` is required.
+The real `DATE` is the key; no integer `fecha_key` is needed. The range covers
+the competition fact, which reaches back to 2010, not just the 2024-onward
+window the daily facts use.
+
+`semana_anio` is `NOT NULL` on purpose. A `CHECK` passes on NULL, so a nullable
+week column would make the range constraint do nothing at all.
 
 ### `dim_mes`
 
-One row per month.
+One row per month, `YYYYMM` as an integer.
 
-| Column | Type | Rule |
+| Column | Type | Notes |
 |---|---|---|
-| `periodo_mes` | `DATE` | First day of month, primary key |
-| `anio` | `SMALLINT` | Derived |
-| `mes` | `SMALLINT` | Derived |
-| `nombre_mes` | `VARCHAR(15)` | Derived |
+| `mes_anio` | `INTEGER` | Primary key, e.g. `202607` |
+| `nombre_mes` | `VARCHAR(20) NOT NULL` | |
 
 ### `dim_indice`
 
@@ -96,122 +98,169 @@ the series, not the index. The two `IPC` details have different units
 
 ### `dim_fondo`
 
-One SCD2 version row per base fund.
+One SCD2 version row per base fund. Named `DetalleFondosTotal` in the schema.
 
-| Column | Type | Source |
+| Column | Type | Notes |
 |---|---|---|
-| `sk_fondo` | `VARCHAR(40)` | `sk_fondo`, primary key |
-| `id_fondo` | `VARCHAR(200)` | Business key, not unique across SCD2 versions |
-| `valid_from` | `DATE` | SCD2 start |
-| `valid_to` | `DATE` | SCD2 end, nullable |
-| `is_current` | `BOOLEAN` | Current-version flag |
-| `nombre_fondo` | `VARCHAR(200)` | Fund name |
-| `region` | `VARCHAR(80)` | Region |
-| `tipo_fondo` | `VARCHAR(40)` | Fund type |
-| `tipo_renta` | `VARCHAR(80)` | Income type |
-| `tipo_renta_mixta` | `VARCHAR(40)` | Nullable |
-| `moneda` | `VARCHAR(10)` | Majority class currency |
-| `benchmark` | `VARCHAR(80)` | Benchmark |
-| `sociedad_gestora` | `VARCHAR(200)` | Manager |
-| `cantidad_clases` | `INTEGER` | Number of classes |
+| `FondoKey` | `INT` | Surrogate, primary key |
+| `IdFondo` | `VARCHAR(80)` | Business key, not unique across versions |
+| `ValidoDesde` | `DATE NOT NULL` | SCD2 start |
+| `ValidoHasta` | `DATE` | SCD2 end, null while still reported |
+| `EsActual` | `BOOLEAN NOT NULL` | TRUE only while the fund is still reported |
+| `NombreFondo` | `VARCHAR(80)` | |
+| `Region` | `VARCHAR(20)` | Same vocabulary as `dim_fondo.region` in the CSV |
+| `TipoFondo` | `VARCHAR(20)` | |
+| `TipoRenta` | `VARCHAR(30)` | |
+| `TipoRentaMixta` | `VARCHAR(30)` | Nullable |
+| `Moneda` | `CHAR(3)` | Majority class currency |
+| `Benchmark` | `VARCHAR(20)` | Raw source label, kept next to the resolved key |
+| `ObjetivoKey` | `INT` | FK to `DetalleIndice`, null when the label has no matching series |
+| `SociedadGestora` | `VARCHAR(80)` | |
+| `CantidadClases` | `SMALLINT` | |
+
+`ObjetivoKey` is resolved from `Benchmark` at load time, by matching the label
+against the index catalogue. It resolves 248 of 1925 versions. The unmapped
+labels are the informative part: `No Registrado` (1095) and `Otro` (509) carry
+no benchmark, `30%+70%` is a blend, `MSCI Latam` is not in the catalogue,
+`Rofex 20` is a different index we do not carry, and `IAMC` is a bond index.
+`A3500` is the dolar oficial code, not an equity index.
 
 Restrictions:
 
-- `UNIQUE (id_fondo, valid_from)`.
-- `valid_to >= valid_from` when `valid_to` is not null.
-- One `is_current = TRUE` row per `id_fondo`.
+- `UNIQUE (IdFondo, ValidoDesde)`.
+- `ValidoHasta >= ValidoDesde` when `ValidoHasta` is not null.
+- At most one `EsActual = TRUE` row per `IdFondo`. A fund that stopped being
+  reported has none: its last version is closed on its last observed date, so
+  324 of 1474 funds have no current row.
 
 ### `dim_fondo_clase`
 
-One SCD2 version row per fund/class.
+One SCD2 version row per fund/class. Named `dim_detalle_fondo_clase` in the
+schema.
 
-| Column | Type | Source |
+| Column | Type | Notes |
 |---|---|---|
-| `sk_fondo_clase` | `VARCHAR(40)` | `sk_fondo_clase`, primary key |
-| `id_fondo_clase_dim` | `VARCHAR(300)` | Fund/class business key |
-| `id_fondo` | `VARCHAR(200)` | Base fund business key |
-| `id_codigo_fondo_clase` | `VARCHAR(80)` | CAFCI traceability |
-| `nombre_fondo_clase_origen` | `VARCHAR(250)` | Original source name |
-| `nombre_fondo` | `VARCHAR(200)` | Base fund name |
-| `nombre_clase` | `VARCHAR(120)` | Class name |
-| `valid_from` | `DATE` | SCD2 start |
-| `valid_to` | `DATE` | SCD2 end, nullable |
-| `is_current` | `BOOLEAN` | Current-version flag |
-| `calificacion` | `VARCHAR(80)` | Rating |
-| `tipo_cliente` | `VARCHAR(40)` | Client/category type |
-| `comision_ingreso` | `NUMERIC(12,6)` | Entry fee |
-| `honorarios_adm_sg` | `NUMERIC(12,6)` | Manager fee |
-| `honorarios_adm_sd` | `NUMERIC(12,6)` | Depositary fee |
-| `otros_gastos` | `NUMERIC(12,6)` | Other expenses |
-| `comision_rescate` | `NUMERIC(12,6)` | Redemption fee |
-| `moneda` | `VARCHAR(10)` | Actual class currency |
+| `FondoClaseKey` | `INT` | Surrogate, primary key |
+| `IdFondoClaseDim` | `VARCHAR(100)` | Business key, not unique across versions |
+| `IdFondo` | `VARCHAR(80)` | Base fund business key |
+| `IdCodigoFondoClase` | `VARCHAR(20)` | CAFCI traceability |
+| `NombreFondoClaseOrigen` | `VARCHAR(90)` | Original source name |
+| `NombreFondo` | `VARCHAR(80)` | |
+| `NombreClase` | `VARCHAR(50)` | |
+| `ValidoDesde` | `DATE NOT NULL` | SCD2 start |
+| `ValidoHasta` | `DATE` | SCD2 end, null while still reported |
+| `EsActual` | `BOOLEAN NOT NULL` | TRUE only while the class is still reported |
+| `Calificacion` | `VARCHAR(20)` | Nullable, 147 distinct source values |
+| `TipoCliente` | `VARCHAR(20)` | |
+| `ComisionIngreso` | `NUMERIC(12,4)` | |
+| `HonorariosAdmSg` | `NUMERIC(12,4)` | |
+| `HonorariosAdmSd` | `NUMERIC(12,4)` | |
+| `OtrosGastos` | `NUMERIC(12,4)` | |
+| `ComisionRescate` | `NUMERIC(12,4)` | |
+| `Moneda` | `CHAR(3)` | The class's actual currency |
+| `FondoKey` | `INT` | FK to `DetalleFondosTotal` |
+
+A class version is cut wherever its fund changes version, so a class version
+never spans two fund versions. That makes the parent unambiguous: every class
+version resolves to exactly one fund version by date containment, which is what
+lets the facts carry a surrogate instead of a date-range join.
 
 Restrictions:
 
-- `UNIQUE (id_fondo_clase_dim, valid_from)`.
-- `valid_to >= valid_from` when `valid_to` is not null.
-- One `is_current = TRUE` row per `id_fondo_clase_dim`.
+- `UNIQUE (IdFondoClaseDim, ValidoDesde)`.
+- `ValidoHasta >= ValidoDesde` when `ValidoHasta` is not null.
+- At most one `EsActual = TRUE` row per `IdFondoClaseDim`. 1275 of 5166
+  classes have none, for the same reason as their funds.
 
 ### `fact_fondos_sbs`
 
-The fact table keeps the 34 normalized CSV columns so the CSV can be loaded directly. Important measures are:
+Daily grain, one row per class version per business day. 41034 rows.
 
-- `patrimonio_neto_actual`
-- `patrimonio_neto_anterior`
-- `flujo_neto`
-- `vcp_actual`
-- `vcp_anterior`
-- `cantidad_cuotaparte_actual`
-- `cantidad_cuotaparte_anterior`
-- `variacion_diaria`
-- `variacion_mensual`
-- `variacion_anual`
-- `reexpresion_pesos`
+| Column | Type | Notes |
+|---|---|---|
+| `FondoClaseKey` | `INT NOT NULL` | FK to the class version valid on that date |
+| `IdFondoClaseDim` | `VARCHAR(100) NOT NULL` | Business key, degenerate dimension, no FK |
+| `IdFondo` | `VARCHAR(80) NOT NULL` | |
+| `Fecha` | `DATE NOT NULL` | FK to `dim_time` |
+| `VcpActual` / `VcpAnterior` | `NUMERIC(20,3)` | |
+| `ReexpresionPesos` | `NUMERIC(20,3)` | |
+| `VariacionDiaria` / `Mensual` / `Anual` | `NUMERIC(14,3)` | Percent |
+| `CantidadCuotaparteActual` / `Anterior` | `NUMERIC(20,4)` | |
+| `PatrimonioNetoActual` / `Anterior` | `NUMERIC(20,2)` | |
+| `FlujoNeto` | `DOUBLE PRECISION` | Derived, see below |
 
-`flujo_neto` is the only measure not present in the source workbook. It is
-materialized in the CSV using `ΔIngresos = (CP₁ − CP₀) × VCP₁`, that is
-`(cantidad_cuotaparte_actual - cantidad_cuotaparte_anterior) * vcp_actual`, with a
-missing previous quantity treated as zero.
+`PRIMARY KEY (FondoClaseKey, Fecha)`.
 
-Identity columns are:
+`FondoClaseKey` is resolved at load time by finding the class version whose
+`[ValidoDesde, ValidoHasta]` contains the row's date, so a historical row keeps
+pointing at the attributes that were true then. Every one of the 41034 rows
+resolves to exactly one version.
 
-- `fecha`
-- `id_fondo_clase_dim`
-- `id_fondo`
-- `id_codigo_fondo_clase`
+`FlujoNeto` is the only measure not in the source workbook:
+`(cantidad_cuotaparte_actual - cantidad_cuotaparte_anterior) * vcp_actual`, with
+a missing previous quantity treated as zero. It reaches 1.6e14 with 15 decimal
+places, which needs 30 digits, so it is stored as `DOUBLE PRECISION`; the extra
+decimals are float noise from the multiplication. Rounding it in preprocessing
+would allow `NUMERIC(20,2)`.
 
-Use `PRIMARY KEY (fecha, id_fondo_clase_dim)`.
-
-The fact also keeps current denormalized attributes (`benchmark`, `moneda`, `sociedad_gestora`) because the current load is intentionally simple.
+The fact keeps 15 of the 34 CSV columns. The 18 descriptive ones (`tipo_fondo`,
+`region`, `benchmark`, `moneda`, the fees, `plazo_liquidacion_dias`, and the
+names) live in the class dimension and are reachable by join.
 
 ### `fact_fondos_competencia`
 
-Use the same 34 columns as `fact_fondos_sbs`, loaded from the monthly competition CSV.
+Monthly grain, same 16 columns plus `MesAno`. 85871 rows.
 
-Add or derive:
-
-- `periodo_mes` as the first day of the month from `fecha`.
-- Use `PRIMARY KEY (periodo_mes, id_fondo_clase_dim)`.
-
-### `fact_cotizacion_indice`
-
-One row per date and per detail series.
-
-| Column | Type | Source |
+| Column | Type | Notes |
 |---|---|---|
-| `fecha` | `DATE` | `fecha` |
-| `indice_detalle_key` | `VARCHAR(40)` | `indice_detalle_key`, foreign key to `dim_indice_detalle` |
-| `valor` | `NUMERIC(24,6)` | `valor` |
-| `frecuencia` | `CHAR(1)` | `D` or `M` |
+| `FondoClaseKey` | `INT NOT NULL` | As above |
+| `IdFondoClaseDim` | `VARCHAR(100) NOT NULL` | |
+| `IdFondo` | `VARCHAR(80) NOT NULL` | |
+| `Fecha` | `DATE NOT NULL` | FK to `dim_time` |
+| `MesAno` | `INTEGER NOT NULL` | FK to `dim_mes`, derived from `Fecha` |
+| *measures* | as in `fact_fondos_sbs` | |
 
-Use `PRIMARY KEY (fecha, indice_detalle_key)`.
+`PRIMARY KEY (FondoClaseKey, MesAno)`.
 
-`frecuencia` is redundant with `dim_indice.frecuencia` and is present so the fact
-can be filtered without joining. Validate the two always agree.
+`Fecha` is not part of the key. A month holds up to 14 different `Fecha` values,
+because the source reports the competition on varying days; the fact keeps one
+row per class per month and records which of those dates it came from. `MesAno`
+is derived from `Fecha` at load time, so the two cannot disagree.
+
+### `CotizacionIndices`
+
+One row per date and per detail series, at two granularities. 4995 rows.
+
+| Column | Type | Notes |
+|---|---|---|
+| `CotizacionKey` | `BIGINT` | Identity, primary key |
+| `Fecha` | `DATE` | Null for monthly series, FK to `dim_time` |
+| `MesAno` | `INTEGER` | Null for daily series, FK to `dim_mes` |
+| `IndiceDetalladoKey` | `INT NOT NULL` | FK to `DetalleIndice` |
+| `Valor` | `NUMERIC(24,16)` | |
+| `Frecuencia` | `CHAR(1) NOT NULL` | `D` or `M` |
+
+`CONSTRAINT chk_xor CHECK ((Fecha IS NULL) <> (MesAno IS NULL))` enforces that a
+row carries exactly one period. The grain cannot live in the primary key for
+this reason: PK columns are implicitly `NOT NULL`, which contradicts the XOR.
+
+So the grain is enforced by two unique indexes instead, one per granularity:
+
+```sql
+CREATE UNIQUE INDEX uq_cot_diario  ON CotizacionIndices (Fecha, IndiceDetalladoKey);
+CREATE UNIQUE INDEX uq_cot_mensual ON CotizacionIndices (MesAno, IndiceDetalladoKey);
+```
+
+This works because Postgres treats NULLs as distinct in a unique index, so each
+index skips the rows belonging to the other granularity. Do not add
+`NULLS NOT DISTINCT`; it would make every monthly row collide with the next.
+
+`Frecuencia` is redundant with `Indice.Frecuencia` and is present so the fact can
+be filtered without joining. Validate that the two always agree.
 
 Scale note: `IPC_VAR` arrives from INDEC as a fraction (`0.0347` = 3.47%) and is
-stored already scaled to percent, so every `Porcentaje` series in the fact reads on
-the same 0-100 scale. See `A_PORCENTAJE` in `src/preprocessing/clean.py`.
+stored already scaled to percent, so every `Porcentaje` series reads on the same
+0-100 scale. See `A_PORCENTAJE` in `src/preprocessing/clean.py`.
 
 ## Compatibility with the draft model
 
@@ -225,7 +274,7 @@ the same 0-100 scale. See `A_PORCENTAJE` in `src/preprocessing/clean.py`.
 | Indice | `dim_indice` | Generic level; 11 indices |
 | Detalle Indice | `dim_indice_detalle` | Leaf level; 13 series, one per fact row |
 | Mes | `dim_mes` | Derived from dates |
-| Time | `dim_fecha` | Simplified to date key |
+| Time | `dim_time` | Simplified to a real DATE key |
 
 Not available in the generated data:
 
@@ -284,58 +333,66 @@ fact CSVs, and the staging table exists to absorb the difference: `\copy` maps
 columns by position, so the staging table must carry the full header in the
 CSV's exact order.
 
-No staging tables are needed for this assignment. The final fact tables are intentionally shaped like their normalized CSVs so `\\copy` can load them directly.
-
 ## Joins
 
 ### Fund fact to fund dimension
 
-```text
-fact_fondos_*.id_fondo
-    -> dim_fondo.id_fondo
+The facts carry the class version surrogate, so no date-range join is needed
+for the class dimension:
 
-fact_fondos_*.id_fondo_clase_dim
-    -> dim_fondo_clase.id_fondo_clase_dim
+```text
+fact_fondos_*.FondoClaseKey  -> dim_detalle_fondo_clase.FondoClaseKey
+dim_detalle_fondo_clase.FondoKey -> DetalleFondosTotal.FondoKey
 ```
 
-Because the dimensions are SCD2, add the date condition:
+To go from a class to its fund's descriptive attributes, join the surrogate and
+then use `EsActual`, keeping in mind that a key which stopped being reported has
+no current row. For a historical view, join on the validity interval instead:
 
 ```text
-fact.fecha BETWEEN dimension.valid_from
-              AND COALESCE(dimension.valid_to, DATE '9999-12-31')
+dimension.ValidoDesde <= fact.Fecha
+  AND (dimension.ValidoHasta >= fact.Fecha OR dimension.ValidoHasta IS NULL)
 ```
 
 ### Date and month joins
 
 ```text
-fact_fondos_*.fecha -> dim_fecha.fecha
-fact_fondos_competencia.periodo_mes -> dim_mes.periodo_mes
+fact_fondos_*.Fecha     -> dim_time.date_key
+CotizacionIndices.Fecha -> dim_time.date_key
+CotizacionIndices.MesAno, fact_fondos_competencia.MesAno -> dim_mes.mes_anio
 ```
 
 ### Index quotation joins
 
 ```text
-fact_cotizacion_indice.indice_detalle_key -> dim_indice_detalle.indice_detalle_key
-dim_indice_detalle.codigo_indice -> dim_indice.codigo_indice
-fact_cotizacion_indice.fecha -> dim_fecha.fecha
+CotizacionIndices.IndiceDetalladoKey -> DetalleIndice.IndiceDetalladoKey
+DetalleIndice.IndiceKey              -> Indice.IndiceKey
+DetalleFondosTotal.ObjetivoKey       -> DetalleIndice.IndiceDetalladoKey
 ```
 
 ## Validation
 
-The load is successful when:
+`sql/dw_load.sql` runs these at the end of the load. Each must return zero.
 
 1. Fact row counts match the generated CSV row counts.
 2. No fact primary keys are duplicated.
-3. Every fact date exists in `dim_fecha`.
-4. Every monthly period exists in `dim_mes`.
-5. Every `indice_detalle_key` in the quotation fact exists in `dim_indice_detalle`.
-6. Every `codigo_indice` in `dim_indice_detalle` exists in `dim_indice`.
-7. The fact's `frecuencia` always matches `dim_indice.frecuencia` for the parent index.
-8. Every fact `id_fondo` exists in the fund dimension business-key set.
-9. Every fact `id_fondo_clase_dim` exists in the class dimension business-key set.
-10. SCD2 intervals have `valid_to >= valid_from`.
-11. Each SCD2 business key has exactly one current row.
-12. Financial values load as `NUMERIC` without conversion errors.
+3. Every `Fecha` exists in `dim_time`, and every `MesAno` in `dim_mes`.
+4. Every `IndiceDetalladoKey` in the facts and in `DetalleFondosTotal` exists
+   in `DetalleIndice`.
+5. `DetalleIndice.IndiceKey` exists in `Indice`.
+6. The degenerate `IdFondoClaseDim` on each fact row matches the class version
+   the surrogate points at. This is the check that catches a bad load join.
+7. `SCD2 intervals have ValidoHasta >= ValidoDesde`.
+8. Each SCD2 key has at most one current row.
+9. Every class version resolves to exactly one fund version, so
+   `dim_detalle_fondo_clase.FondoKey` is null only where no fund version covers
+   the class period.
+10. `CotizacionIndices` holds exactly one of `Fecha` or `MesAno` per row, and no
+    duplicate within a granularity.
+
+Current results on the generated data: 85871 competition rows, 41034 SBS rows,
+11945 class versions, 1925 fund versions, 4995 quotation rows, 248 fund
+versions with a resolved `ObjetivoKey`, 0 orphans, 0 duplicate keys.
 
 ## Sharing the database with the professor
 

@@ -241,4 +241,7 @@ The command writes:
 - `data/processed/dim_fondo_clase.csv`: one SCD2 version per class when a class attribute changes.
 - `data/processed/dim_fondo.csv`: one SCD2 version per base fund when a fund attribute changes.
 
-Each dimension includes a stable business key, a generated version key, `valid_from`, `valid_to`, and `is_current`. `dim_fondo_clase` keeps each class's actual `moneda`; `dim_fondo` uses the majority class currency for each fund/date. The builder reports any remaining fund-level conflicts.
+Each dimension includes a stable business key, a generated version key, `valid_from`, `valid_to`, and `is_current`. `is_current` is TRUE only while the key is still being reported: a fund or class that dropped out of the source has its last version closed on its last observed date and no current row at all. `dim_fondo_clase` keeps each class's actual `moneda`; `dim_fondo` uses the majority class currency for each fund/date. The builder reports any remaining fund-level conflicts.
+
+Class versions are also cut wherever their fund changes version, so a class
+version always sits inside exactly one fund version.

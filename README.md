@@ -90,6 +90,34 @@ SELECT * FROM measurement LIMIT 10;
 - `database does not exist`: run `psql -l` to list DBs, re-run `createdb olap`.
 - `password authentication failed`: wrong username. Try your macOS username vs `postgres`.
 
+## Data warehouse (`fci_dw`)
+
+Star schema for the index quotes and the fund data. Schema in
+`sql/tablas_fondos.sql`, load in `sql/dw_load.sql`.
+
+```zsh
+uv run python -m src.preprocessing.clean
+uv run python -m src.preprocessing.vd_datasets
+uv run python -m src.preprocessing.vd_dimensions
+
+createdb fci_dw
+psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/tablas_fondos.sql
+psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/dw_load.sql
+```
+
+Nine tables, and the load takes about two seconds. `dw_load.sql` ends with
+validation queries that must all return zero:
+
+```zsh
+psql -d fci_dw -c "\dt"
+```
+
+DBeaver: driver PostgreSQL, host `localhost`, port `5432`, database
+`fci_dw`, username = your macOS username, password blank (local
+`pg_hba.conf` uses `trust`).
+
+To reload, drop and recreate the database. The load is not idempotent.
+
 ## VD daily preprocessing
 
 El proyecto incluye un preprocesador para los fondos comunes de inversión del archivo `data/raw/VD.zip`. El zip contiene un workbook `.xlsx` por cada snapshot diario disponible.
@@ -158,17 +186,18 @@ The command performs the following steps in order:
 2. Parses `fecha` from `DD/MM/YY` to ISO `YYYY-MM-DD`.
 3. Excludes rows with missing `fecha` under the no-quota assumption.
 4. Adds normalized `id_fondo`, `id_fondo_clase_dim`, and `id_codigo_fondo_clase`.
-5. Removes duplicate `fecha_reporte` + `nombre_fondo_clase_origen` rows.
-6. Keeps only the earliest report for each `nombre_fondo_clase_origen` + `fecha` pair.
-7. Writes open SBS rows at the daily grain to `data/processed/fact_fondos_sbs.csv`.
-8. Writes open non-SBS rows at the latest available date per month to
+5. Adds the derived `flujo_neto` measure.
+6. Removes duplicate `fecha_reporte` + `nombre_fondo_clase_origen` rows.
+7. Keeps only the earliest report for each `nombre_fondo_clase_origen` + `fecha` pair.
+8. Writes open SBS rows at the daily grain to `data/processed/fact_fondos_sbs.csv`.
+9. Writes open non-SBS rows at the latest available date per month to
    `data/processed/fact_fondos_competencia.csv`.
 
 `id_codigo_fondo_clase` is `CAFCI-<codigo_fondo_cafci>-<codigo_clase_cafci>`
 and is retained for source traceability. The monthly grouping key is
 `nombre_fondo_clase_origen`, so different classes remain separate.
 
-Both output files contain these 33 normalized columns:
+Both output files contain these 34 normalized columns:
 
 ```text
 fecha, id_fondo_clase_dim, id_fondo, id_codigo_fondo_clase,
@@ -177,11 +206,16 @@ tipo_renta, region, tipo_renta_mixta, duracion, benchmark, moneda,
 tipo_cliente, vcp_actual, vcp_anterior, variacion_diaria,
 reexpresion_pesos, variacion_mensual, variacion_anual,
 cantidad_cuotaparte_actual, cantidad_cuotaparte_anterior,
-patrimonio_neto_actual, patrimonio_neto_anterior, calificacion,
-sociedad_gestora, comision_ingreso, honorarios_adm_sg,
+patrimonio_neto_actual, patrimonio_neto_anterior, flujo_neto,
+calificacion, sociedad_gestora, comision_ingreso, honorarios_adm_sg,
 honorarios_adm_sd, otros_gastos, comision_rescate,
 plazo_liquidacion_dias
 ```
+
+`flujo_neto` is the one derived measure. It follows the workbook definition
+`ΔIngresos = (CP₁ − CP₀) × VCP₁`, using the change in `cantidad_cuotaparte_*`
+times `vcp_actual`. A missing `cantidad_cuotaparte_anterior` is treated as zero
+previous cuotapartes.
 
 ### SCD2 fund dimensions
 

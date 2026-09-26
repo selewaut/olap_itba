@@ -100,6 +100,7 @@ uv run python -m src.preprocessing.clean
 uv run python -m src.preprocessing.vd_datasets
 uv run python -m src.preprocessing.vd_dimensions
 
+dropdb --force fci_dw
 createdb fci_dw
 psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/tablas_fondos.sql
 psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/dw_load.sql
@@ -128,6 +129,33 @@ psql -d fci_dw -v ON_ERROR_STOP=1 -f sql/dw_load.sql
 Without `--force` the drop fails with `database is being accessed by other
 users` while a GUI client is connected. Disconnect it, or use `--force`, then
 reconnect and refresh.
+
+### Sharing the database
+
+`data/processed` is gitignored, so the load scripts alone do not rebuild the
+database for someone else. To hand over a populated copy, dump it to one file
+and share that.
+
+Whoever owns the source database runs:
+
+```zsh
+pg_dump -d fci_dw --format=plain --no-owner --no-privileges --inserts \
+  --file=dw_full.sql
+```
+
+Each teammate then runs:
+
+```zsh
+createdb fci_dw
+psql -d fci_dw -v ON_ERROR_STOP=1 -f dw_full.sql
+```
+
+The dump is about 35 MB, restores in under ten seconds, and contains all nine
+tables with their data as `INSERT` statements. It is not tracked in git
+(`.gitignore`), so it has to be shared out of band, and it is a snapshot: it
+does not pick up later changes, so re-dump if the data moves.
+
+The dump comes from PostgreSQL 18 and will not restore into 17 or older.
 
 ## VD daily preprocessing
 

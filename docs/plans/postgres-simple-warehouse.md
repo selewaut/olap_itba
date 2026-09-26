@@ -209,23 +209,30 @@ names) live in the class dimension and are reachable by join.
 
 ### `fact_fondos_competencia`
 
-Monthly grain, same 16 columns plus `MesAno`. 85871 rows.
+Monthly grain, the same 15 measures as `fact_fondos_sbs` but keyed on the month
+instead of the day. 85871 rows.
 
 | Column | Type | Notes |
 |---|---|---|
 | `FondoClaseKey` | `INT NOT NULL` | As above |
 | `IdFondoClaseDim` | `VARCHAR(100) NOT NULL` | |
 | `IdFondo` | `VARCHAR(80) NOT NULL` | |
-| `Fecha` | `DATE NOT NULL` | FK to `dim_time` |
-| `MesAno` | `INTEGER NOT NULL` | FK to `dim_mes`, derived from `Fecha` |
+| `MesAno` | `INTEGER NOT NULL` | FK to `dim_mes`, derived from the CSV date |
 | *measures* | as in `fact_fondos_sbs` | |
 
 `PRIMARY KEY (FondoClaseKey, MesAno)`.
 
-`Fecha` is not part of the key. A month holds up to 14 different `Fecha` values,
-because the source reports the competition on varying days; the fact keeps one
-row per class per month and records which of those dates it came from. `MesAno`
-is derived from `Fecha` at load time, so the two cannot disagree.
+There is no `Fecha` column. The source publishes a month's competition on
+varying days, so a month holds between 1 and 14 distinct dates, and 32 of the
+85699 August 2026 rows were published before the month end while the other
+3783 came in on the 31st. That date is a publication artifact rather than a
+business date, and keeping it would make `GROUP BY Fecha` return 226 groups
+where there are 56 periods.
+
+The date is still used at load time, to resolve `FondoClaseKey` against the
+class version valid on that day, so the link between a row and its source
+snapshot survives indirectly. This also matches how `CotizacionIndices` stores
+its monthly rows: period, no date.
 
 ### `CotizacionIndices`
 
@@ -357,8 +364,7 @@ dimension.ValidoDesde <= fact.Fecha
 ### Date and month joins
 
 ```text
-fact_fondos_*.Fecha     -> dim_time.date_key
-CotizacionIndices.Fecha -> dim_time.date_key
+fact_fondos_sbs.Fecha, CotizacionIndices.Fecha -> dim_time.date_key
 CotizacionIndices.MesAno, fact_fondos_competencia.MesAno -> dim_mes.mes_anio
 ```
 

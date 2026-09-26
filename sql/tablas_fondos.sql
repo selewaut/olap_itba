@@ -1,4 +1,4 @@
---1. TABLA INDICE
+-- TABLA INDICE: Contiene detalles del indice independiente de en que forma este representado (sea moneda, porcentaje, variacion, etc)
 CREATE TABLE Indice (
     IndiceKey    INT PRIMARY KEY,
     CodigoIndice VARCHAR(20) NOT NULL UNIQUE,
@@ -8,7 +8,7 @@ CREATE TABLE Indice (
     Frecuencia   CHAR(1) NOT NULL CHECK (Frecuencia IN ('D','M'))
 );
 
---2. TABLA DETALLE INDICE
+-- TABLA DETALLE INDICE : Contiene detalles del indice que dependen de como esta representado, ejemplo monda, unidad
 CREATE TABLE DetalleIndice (
     IndiceDetalladoKey  INT PRIMARY KEY,
     CodigoIndiceDetalle VARCHAR(60) NOT NULL UNIQUE,
@@ -20,11 +20,7 @@ CREATE TABLE DetalleIndice (
     FOREIGN KEY (IndiceKey) REFERENCES Indice(IndiceKey)
 );
 
--- 3.TABLA COTIZACION INDICES
--- (definida mas abajo, despues de dim_mes y dim_time, por sus FK)
-
-
---4 TABLA DETALLE FONDOS TOTAL
+--TABLA DETALLE FONDOS TOTAL: contiene detalles del fondo independiente de la clase. Es un SCD porque va cambiando por ejemplo calificacion, cantidad de clases, etc.
 CREATE TABLE DetalleFondosTotal (
     FondoKey           INT PRIMARY KEY,
     IdFondo            VARCHAR(80) NOT NULL,
@@ -45,16 +41,14 @@ CREATE TABLE DetalleFondosTotal (
     UNIQUE (IdFondo, ValidoDesde)
 );
 
--- 1. Dim - Mes
-
+-- TABLA Calendario Mes Año
 CREATE TABLE dim_mes (
     mes_anio INTEGER PRIMARY KEY,
     nombre_mes VARCHAR(20) NOT NULL
 );
 
 
--- 2. Dim - Time
-
+-- TABLA Calendario Diario con atributos adicionales como feriados, dia habil, etc.
 CREATE TABLE dim_time (
     date_key     DATE PRIMARY KEY,
     mes_anio     INTEGER NOT NULL,
@@ -75,7 +69,7 @@ CREATE TABLE dim_time (
 );
 
 
--- 3. Fact - Cotizacion de indices
+-- TABLA Cotizacion de los indices, en sus diferentes variantes calculado como porcentaje, variacion, ratio, USD, ARS, etc. Puede ser nivel mensual o diario.
 CREATE TABLE CotizacionIndices (
     CotizacionKey      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     Fecha              DATE,
@@ -91,11 +85,13 @@ CREATE TABLE CotizacionIndices (
     FOREIGN KEY (MesAno)            REFERENCES dim_mes(mes_anio),
     FOREIGN KEY (IndiceDetalladoKey) REFERENCES DetalleIndice(IndiceDetalladoKey)
 );
+
+-- fact con doble granularidad (mensual para indices de precios y diaria)
 CREATE UNIQUE INDEX uq_cot_diario  ON CotizacionIndices (Fecha, IndiceDetalladoKey);
 CREATE UNIQUE INDEX uq_cot_mensual ON CotizacionIndices (MesAno, IndiceDetalladoKey);
 
 
--- 3. Dim - Detalle Fondo Clase Total
+-- TABLA Detalle Fondo Clase TotalÑ contiene atributos a nivel fondoxclase como honorario, tambien SCD.
 
 CREATE TABLE dim_detalle_fondo_clase (
     FondoClaseKey          INTEGER PRIMARY KEY,
@@ -122,13 +118,12 @@ CREATE TABLE dim_detalle_fondo_clase (
 );
 
 
--- 4. Fact - Fondos SBS
+-- TABLA FONDOS SBS. Cotizacion, VCP, cantidad cuotas, PAtrimonio, flujo a nivel diario de fondos de SBS. Tiene precomputado variaciones diarias, mensuales y anuales
 CREATE TABLE fact_fondos_sbs (
     FondoClaseKey   INT NOT NULL,
     IdFondoClaseDim VARCHAR(100) NOT NULL,
     IdFondo         VARCHAR(80) NOT NULL,
     Fecha           DATE NOT NULL,
-
     VcpActual                  NUMERIC(20,3),
     VcpAnterior                NUMERIC(20,3),
     ReexpresionPesos           NUMERIC(20,3),
@@ -154,13 +149,13 @@ CREATE TABLE fact_fondos_sbs (
 );
 
 
--- 5. Fact - Fondos Competencia
+-- TABLA FONDOS MERCADO. Cotizacion, VCP, cantidad cuotas, PAtrimonio, flujo a nivel mensual de fondos mercado. Tiene precomputado variaciones mensuales y anuales
+
 
 CREATE TABLE fact_fondos_competencia (
     FondoClaseKey   INT NOT NULL,
     IdFondoClaseDim VARCHAR(100) NOT NULL,
     IdFondo         VARCHAR(80) NOT NULL,
-    Fecha           DATE NOT NULL,
     MesAno          INTEGER NOT NULL,
 
     VcpActual                  NUMERIC(20,3),
@@ -184,11 +179,7 @@ CREATE TABLE fact_fondos_competencia (
 
     CONSTRAINT fk_competencia_mes
         FOREIGN KEY (MesAno)
-        REFERENCES dim_mes(mes_anio),
-
-    CONSTRAINT fk_competencia_fecha
-        FOREIGN KEY (Fecha)
-        REFERENCES dim_time(date_key)
+        REFERENCES dim_mes(mes_anio)
 );
 
 

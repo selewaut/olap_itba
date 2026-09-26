@@ -248,10 +248,10 @@ TRUNCATE stg_fondos;
 
 \copy stg_fondos FROM 'data/processed/fact_fondos_competencia.csv' CSV HEADER
 
-INSERT INTO fact_fondos_competencia (FondoClaseKey, IdFondoClaseDim, IdFondo, Fecha, MesAno, VcpActual,
+INSERT INTO fact_fondos_competencia (FondoClaseKey, IdFondoClaseDim, IdFondo, MesAno, VcpActual,
     VcpAnterior, ReexpresionPesos, VariacionDiaria, VariacionMensual, VariacionAnual,
     CantidadCuotaparteActual, CantidadCuotaparteAnterior, PatrimonioNetoActual, PatrimonioNetoAnterior, FlujoNeto)
-SELECT v.FondoClaseKey, s.id_fondo_clase_dim, s.id_fondo, s.fecha::DATE,
+SELECT v.FondoClaseKey, s.id_fondo_clase_dim, s.id_fondo,
        EXTRACT(YEAR FROM s.fecha::DATE)::INT * 100 + EXTRACT(MONTH FROM s.fecha::DATE)::INT,
        s.vcp_actual::NUMERIC(20,3), s.vcp_anterior::NUMERIC(20,3), s.reexpresion_pesos::NUMERIC(20,3),
        s.variacion_diaria::NUMERIC(14,3), s.variacion_mensual::NUMERIC(14,3), s.variacion_anual::NUMERIC(14,3),
